@@ -42,7 +42,7 @@ class BertSentimentPredictor(nn.Module):
 
             return squashed
         else:
-            squashed = self.u(bert_cls)
+            squashed = self.u(bert_cls).squeeze()
             squashed = torch.sigmoid(squashed)
  
             return squashed * 4 # Range of 0 ~ 4

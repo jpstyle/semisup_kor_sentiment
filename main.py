@@ -274,7 +274,7 @@ if __name__ == "__main__":
     checkpoint = {
         "c2i": c2i,
         "j2i": j2i,
-        "model_c": m_cbilstm.module.state_dict() if len(config.gpus) > 1 else m_cbilstm.state_dict()
+        "model_c": m_cbilstm.module.state_dict() if len(config.gpus) > 1 else m_cbilstm.state_dict(),
         "model_b": m_kobert.module.state_dict() if len(config.gpus) > 1 else m_kobert.state_dict()
     }
     

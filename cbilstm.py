@@ -84,7 +84,7 @@ class CBiLSTM(nn.Module):
 
             return squashed
         else:
-            squashed = self.u(seq_embs)
+            squashed = self.u(seq_embs).squeeze()
             squashed = torch.sigmoid(squashed)
  
             return squashed * 4 # Range of 0 ~ 4
