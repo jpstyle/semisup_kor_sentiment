@@ -8,16 +8,24 @@ tokenizer = get_tokenizer()
 
 class BertSentimentPredictor(nn.Module):
 
-    def __init__(self):
+    def __init__(self, clf_or_reg):
 
         super(BertSentimentPredictor, self).__init__()
 
+        self.clf_or_reg = clf_or_reg
+
         self.bert = get_kobert_model()
-        self.u = nn.Linear(self.bert.pooler.dense.out_features, 1)
+
+        if self.clf_or_reg:
+            # Classification task
+            self.u = nn.Linear(self.bert.pooler.dense.out_features, 3)
+        else:
+            # Regression task
+            self.u = nn.Linear(self.bert.pooler.dense.out_features, 1)
 
         # Xavier inits
         nn.init.xavier_normal_(self.u.weight)
-        nn.init.constant(self.u.bias, 0.0)
+        nn.init.constant_(self.u.bias, 0.0)
 
 
     # Takes in batch of torch LongTensors processed by batch_samples
@@ -28,14 +36,20 @@ class BertSentimentPredictor(nn.Module):
         b_type = torch.zeros_like(batch, dtype=torch.long)
 
         _, bert_cls = self.bert(batch, b_mask, b_type)
-        squashed = self.u(bert_cls)
-        squashed = torch.sigmoid(squashed)
 
-        return squashed * 4 # Range of 0 ~ 4
+        if self.clf_or_reg:
+            squashed = self.u(bert_cls)
+
+            return squashed
+        else:
+            squashed = self.u(bert_cls)
+            squashed = torch.sigmoid(squashed)
+ 
+            return squashed * 4 # Range of 0 ~ 4
 
 
 # Process and batch samples from generator
-def batch_samples(gen, batch_size):
+def batch_samples(examples, batch_size, cuda_device):
     batch = []
 
     # Helper method to pack samples into a single tensor
@@ -61,9 +75,13 @@ def batch_samples(gen, batch_size):
         else:
             b_scores = None
 
+        if cuda_device > -1:
+            b_as_tensor = b_as_tensor.to(f"cuda:{cuda_device}")
+            b_scores = b_scores.to(f"cuda:{cuda_device}")
+
         return b_as_tensor, b_scores
 
-    for ex in gen:
+    for ex in examples:
         # Ignore NA-scored instances
         if ex[1] == "NA":
             continue

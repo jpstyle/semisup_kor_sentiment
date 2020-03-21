@@ -16,9 +16,11 @@ LSTM_DIM = 300
 
 class CBiLSTM(nn.Module):
 
-    def __init__(self, ch_count, jm_count):
+    def __init__(self, ch_count, jm_count, clf_or_reg):
 
         super(CBiLSTM, self).__init__()
+
+        self.clf_or_reg = clf_or_reg
 
         self.ch_count = ch_count
         self.jm_count = jm_count
@@ -28,21 +30,26 @@ class CBiLSTM(nn.Module):
         self.jm_embs = nn.Embedding(self.jm_count, JM_SIZE, padding_idx=0)
 
         # Conv layers
-        self.ch_convs = [nn.Conv1d(CH_SIZE, k_out, k_size) for k_size, k_out in CH_KERNELS]
-        self.jm_convs = [nn.Conv1d(JM_SIZE, k_out, k_size) for k_size, k_out in JM_KERNELS]
+        self.ch_convs = nn.ModuleList([nn.Conv1d(CH_SIZE, k_out, k_size) for k_size, k_out in CH_KERNELS])
+        self.jm_convs = nn.ModuleList([nn.Conv1d(JM_SIZE, k_out, k_size) for k_size, k_out in JM_KERNELS])
 
         # 2-layer bidirectional LSTM
         self.lstm = nn.LSTM(input_size=LSTM_DIM, hidden_size=LSTM_DIM, num_layers=2, bidirectional=True, dropout=0.3, batch_first=True)
 
         # Squasher
-        self.u = nn.Linear(LSTM_DIM * 2, 1)
+        if self.clf_or_reg:
+            # Classification task
+            self.u = nn.Linear(LSTM_DIM * 2, 3)
+        else:
+            # Regression task
+            self.u = nn.Linear(LSTM_DIM * 2, 1)
 
         # Xavier inits
         for name, prm in self.named_parameters():
             if "weight" in name:
                 nn.init.xavier_normal_(prm)
             elif "bias" in name:
-                nn.init.constant(prm, 0.0)
+                nn.init.constant_(prm, 0.0)
 
 
     def forward(self, batch_ch, batch_jm, batch_lens):
@@ -64,6 +71,7 @@ class CBiLSTM(nn.Module):
         # Concat to single vecs
         ch_seqs = torch.cat(ch_seqs, dim=-1); jm_seqs = torch.cat(jm_seqs, dim=-1)
         seqs = torch.cat([ch_seqs, jm_seqs], dim=-1)
+        seqs = nn.utils.rnn.pack_padded_sequence(seqs, batch_lens, batch_first=True, enforce_sorted=False)
 
         # Feed to LSTM and retrieve summarizing representations
         _, (final_states, _) = self.lstm(seqs)
@@ -71,13 +79,18 @@ class CBiLSTM(nn.Module):
         seq_embs = seq_embs[1,:,:,:]
         seq_embs = torch.cat([seq_embs[0], seq_embs[1]], dim=-1)
 
-        squashed = self.u(seq_embs)
-        squashed = torch.sigmoid(squashed)
+        if self.clf_or_reg:
+            squashed = self.u(seq_embs)
+
+            return squashed
+        else:
+            squashed = self.u(seq_embs)
+            squashed = torch.sigmoid(squashed)
  
-        return squashed * 4 # Range of 0 ~ 4
+            return squashed * 4 # Range of 0 ~ 4
 
 
-def batch_samples(gen, batch_size, c2i, j2i):
+def batch_samples(examples, batch_size, c2i, j2i, cuda_device):
     batch = []
 
     # Helper method to pack samples into a single tensor
@@ -112,9 +125,14 @@ def batch_samples(gen, batch_size, c2i, j2i):
         else:
             b_scores = None
 
+        if cuda_device > -1:
+            b_as_char_tensor = b_as_char_tensor.to(f"cuda:{cuda_device}")
+            b_as_jamo_tensor = b_as_jamo_tensor.to(f"cuda:{cuda_device}")
+            b_scores = b_scores.to(f"cuda:{cuda_device}")
+
         return b_as_char_tensor, b_as_jamo_tensor, b_lens, b_scores
 
-    for ex in gen:
+    for ex in examples:
         # Ignore NA-scored instances
         if ex[1] == "NA":
             continue
