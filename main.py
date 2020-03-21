@@ -6,6 +6,7 @@ import kobert
 import jamo
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 import torch.optim as optim
 from collections import defaultdict
 
@@ -26,6 +27,10 @@ def parse_arguments():
         type=int,
         default=100,
         help="Co-training epoch number")
+    parser.add_argument("-ph", "--preheat",
+        type=int,
+        default=5,
+        help="Epochs of 'pre-heat' training")
     parser.add_argument("-b", "--batch_size",
         type=int,
         default=24,
@@ -81,7 +86,7 @@ if __name__ == "__main__":
         for j in jamo.j2hcj(jamo.h2j(ex[0])): j2i[j]
         U.append(ex)
 
-    rnd_inds = sorted(random.sample(range(len(U)), U_SUB_SIZE), reverse=True)    
+    rnd_inds = sorted(random.sample(range(len(U)), U_SUB_SIZE), reverse=True)
     for i in rnd_inds:
         U_sub.append(U[i])
         del U[i]
@@ -260,13 +265,95 @@ if __name__ == "__main__":
 
         print(f"Epoch {t+1}: Dev loss CBiLSTM {dev_loss_c:.4f}, KoBERT {dev_loss_b:.4f}")
 
+
+        # 'Pre-heat' for certain number of epochs, not adding instances to L_c/L_b
+        if t < args.preheat:
+            continue
+
+
         # Choose most confident examples from U', for both models
+        confs_c = []; confs_b = []
+
+        u_gen_c = cbilstm.batch_samples(U_sub, BATCH_SIZE, c2i, j2i, CUDA)
+        u_gen_b = kobert.batch_samples(U_sub, BATCH_SIZE, CUDA)
+
+        for i, batch in enumerate(u_gen_c):
+            batch_ch, batch_jm, batch_lens, _ = batch
+
+            if CLF_OR_REG:
+                # Straightforward softmax-based confidence metric
+                out = m_cbilstm(batch_ch, batch_jm, batch_lens)
+                out = F.softmax(out, dim=1).max(dim=1).values
+                confs_c.append(out)
+            else:
+                # Drop-out based confidence metric
+                with torch.no_grad():
+                    m_cbilstm.train()
+                    outs = []
+                    for n in range(20):
+                        outs.append(m_cbilstm(batch_ch, batch_jm, batch_lens))
+                out = -torch.stack(outs, dim=-1).std(dim=-1)
+                confs_c.append(out)
+                m_cbilstm.eval()
+
+        confs_c = torch.cat(confs_c)
+        topN_inds_c = [i.item() for i in confs_c.topk(N).indices]
+
+        for i, batch in enumerate(u_gen_b):
+            batch_bert, _ = batch
+
+            if CLF_OR_REG:
+                # Straightforward softmax-based confidence metric
+                out = m_kobert(batch_bert)
+                out = F.softmax(out, dim=1).max(dim=1).values
+                confs_b.append(out)
+            else:
+                # Drop-out based confidence metric
+                with torch.no_grad():
+                    m_kobert.train()
+                    outs = []
+                    for n in range(15):
+                        outs.append(m_kobert(batch_bert))
+                out = -torch.stack(outs, dim=-1).std(dim=-1)
+                confs_b.append(out)
+                m_kobert.eval()
+
+        confs_b = torch.cat(confs_b)
+        topN_inds_b = [i.item() for i in confs_b.topk(N).indices]
 
         # Add those to L_c/L_b
+        for i in topN_inds_c:
+            ins = list(cbilstm.batch_samples([U_sub[i]], 1, c2i, j2i, CUDA))[0]
+
+            if CLF_OR_REG:
+                label = m_cbilstm(ins[0], ins[1], ins[2]).max(dim=-1).indices.item() + 1
+            else:
+                label = round(m_cbilstm(ins[0], ins[1], ins[2]).item(), 3)
+
+            L_c.append((U_sub[i][0], str(label)))
+        for i in topN_inds_b:
+            ins = list(kobert.batch_samples([U_sub[i]], 1, CUDA))[0]
+
+            if CLF_OR_REG:
+                label = m_kobert(ins[0]).max(dim=-1).indices.item() + 1
+            else:
+                label = round(m_kobert(ins[0]).item(), 3)
+
+            L_b.append((U_sub[i][0], str(label)))
+
+
+        # Remove the added instances from U_sub
+        to_remove = sorted(list(set(topN_inds_c) | set(topN_inds_b)), reverse=True)
+        for i in to_remove:
+            del U_sub[i]
 
         # Replenish U' from U
+        rnd_inds = sorted(random.sample(range(len(U)), len(to_remove)), reverse=True)
+        for i in rnd_inds:
+            U_sub.append(U[i])
+            del U[i]
 
-    ## One final training epoch?
+    # One final training epoch
 
     # Final evaluation on test data; accuracy for clf, squared err for reg
 
@@ -274,8 +361,8 @@ if __name__ == "__main__":
     checkpoint = {
         "c2i": c2i,
         "j2i": j2i,
-        "model_c": m_cbilstm.module.state_dict() if len(config.gpus) > 1 else m_cbilstm.state_dict(),
-        "model_b": m_kobert.module.state_dict() if len(config.gpus) > 1 else m_kobert.state_dict()
+        "model_c": m_cbilstm.module.state_dict(),
+        "model_b": m_kobert.module.state_dict()
     }
     
     if not os.path.isdir("models"):

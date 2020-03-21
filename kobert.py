@@ -77,7 +77,9 @@ def batch_samples(examples, batch_size, cuda_device):
 
         if cuda_device > -1:
             b_as_tensor = b_as_tensor.to(f"cuda:{cuda_device}")
-            b_scores = b_scores.to(f"cuda:{cuda_device}")
+
+            if b_scores is not None:
+                b_scores = b_scores.to(f"cuda:{cuda_device}")
 
         return b_as_tensor, b_scores
 
@@ -88,7 +90,7 @@ def batch_samples(examples, batch_size, cuda_device):
 
         if len(batch) >= batch_size:
             yield pack_samples(batch)
-            batch = []
+            batch = [ex]
         else:
             batch.append(ex)
 
