@@ -270,6 +270,10 @@ if __name__ == "__main__":
         if t < args.preheat:
             continue
 
+        # Finish here for the last epoch
+        if t == COTR_EPOCH-1:
+            break
+
 
         # Choose most confident examples from U', for both models
         confs_c = []; confs_b = []
@@ -290,7 +294,7 @@ if __name__ == "__main__":
                 with torch.no_grad():
                     m_cbilstm.train()
                     outs = []
-                    for n in range(20):
+                    for n in range(15):
                         outs.append(m_cbilstm(batch_ch, batch_jm, batch_lens))
                 out = -torch.stack(outs, dim=-1).std(dim=-1)
                 confs_c.append(out)
@@ -353,9 +357,6 @@ if __name__ == "__main__":
             U_sub.append(U[i])
             del U[i]
 
-    # One final training epoch
-
-    # Final evaluation on test data; accuracy for clf, squared err for reg
 
     # Save trained models
     checkpoint = {
@@ -367,8 +368,8 @@ if __name__ == "__main__":
     
     if not os.path.isdir("models"):
         os.mkdir("models")
-    save_path = os.path.join("models", f"{model_name}.pt")
+    save_path = os.path.join("models", f"{args.exp_mode}_{args.epoch}.pt")
     torch.save(checkpoint, save_path)
 
     print("----------------")
-    print(f"Saved model checkpoint to {model_save_path}")
+    print(f"Saved model checkpoint to {save_path}")
