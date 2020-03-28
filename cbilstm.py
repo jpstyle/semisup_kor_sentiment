@@ -30,11 +30,14 @@ class CBiLSTM(nn.Module):
         self.jm_embs = nn.Embedding(self.jm_count, JM_SIZE, padding_idx=0)
 
         # Conv layers
-        self.ch_convs = nn.ModuleList([nn.Conv1d(CH_SIZE, k_out, k_size) for k_size, k_out in CH_KERNELS])
-        self.jm_convs = nn.ModuleList([nn.Conv1d(JM_SIZE, k_out, k_size) for k_size, k_out in JM_KERNELS])
+        self.ch_convs = nn.ModuleList([nn.Conv1d(CH_SIZE, k_out, k_size, padding=1) for k_size, k_out in CH_KERNELS])
+        self.jm_convs = nn.ModuleList([nn.Conv1d(JM_SIZE, k_out, k_size, padding=1) for k_size, k_out in JM_KERNELS])
 
         # 2-layer bidirectional LSTM
-        self.lstm = nn.LSTM(input_size=LSTM_DIM, hidden_size=LSTM_DIM, num_layers=2, bidirectional=True, dropout=0.3, batch_first=True)
+        self.lstm = nn.LSTM(input_size=LSTM_DIM, hidden_size=LSTM_DIM, num_layers=2, bidirectional=True, dropout=0.5, batch_first=True)
+
+        # Dropout
+        self.do = nn.Dropout(p=0.5)
 
         # Squasher
         if self.clf_or_reg:
@@ -71,9 +74,11 @@ class CBiLSTM(nn.Module):
         # Concat to single vecs
         ch_seqs = torch.cat(ch_seqs, dim=-1); jm_seqs = torch.cat(jm_seqs, dim=-1)
         seqs = torch.cat([ch_seqs, jm_seqs], dim=-1)
+        seqs = self.do(seqs)
         seqs = nn.utils.rnn.pack_padded_sequence(seqs, batch_lens, batch_first=True, enforce_sorted=False)
 
         # Feed to LSTM and retrieve summarizing representations
+        self.lstm.flatten_parameters()
         _, (final_states, _) = self.lstm(seqs)
         seq_embs = final_states.view(2, 2, b_size, -1) # (num_layer, num_direction, b_size, hidden_size)
         seq_embs = seq_embs[1,:,:,:]
@@ -85,6 +90,11 @@ class CBiLSTM(nn.Module):
             return squashed
         else:
             squashed = self.u(seq_embs).squeeze()
+
+            # Happens with DataParallel, with singleton inputs
+            if len(squashed.shape) == 0:
+                squashed = squashed.unsqueeze(0)
+
             squashed = torch.sigmoid(squashed)
  
             return squashed * 4 # Range of 0 ~ 4
@@ -125,12 +135,14 @@ def batch_samples(examples, batch_size, c2i, j2i, cuda_device):
         else:
             b_scores = None
 
-        if cuda_device > -1:
-            b_as_char_tensor = b_as_char_tensor.to(f"cuda:{cuda_device}")
-            b_as_jamo_tensor = b_as_jamo_tensor.to(f"cuda:{cuda_device}")
+        if len(cuda_device) > 0:
+            b_as_char_tensor = b_as_char_tensor.to(f"cuda:{cuda_device[0]}")
+            b_as_jamo_tensor = b_as_jamo_tensor.to(f"cuda:{cuda_device[0]}")
 
             if b_scores is not None:
-                b_scores = b_scores.to(f"cuda:{cuda_device}")
+                b_scores = b_scores.to(f"cuda:{cuda_device[0]}")
+
+        b_lens = torch.LongTensor(b_lens)
 
         return b_as_char_tensor, b_as_jamo_tensor, b_lens, b_scores
 

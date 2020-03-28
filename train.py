@@ -37,7 +37,7 @@ def parse_arguments():
         help="Training batch size")
     parser.add_argument("-c", "--cuda_device",
         type=int,
-        default=-1,
+        default=[], nargs="+",
         help="CUDA device to use")
     parser.add_argument("-m", "--exp_mode",
         type=str,
@@ -56,7 +56,7 @@ if __name__ == "__main__":
     CUDA = args.cuda_device
     COTR_EPOCH = args.epoch
     BATCH_SIZE = args.batch_size
-    N = BATCH_SIZE * 3
+    N = BATCH_SIZE * 2
     U_SUB_SIZE = BATCH_SIZE * 12
 
     # Char/jamo vocabularies
@@ -73,17 +73,31 @@ if __name__ == "__main__":
     U = []
     U_sub = []
 
+    l = u = 0
+
     # Fill in L, U and U_sub
     for i, ex in enumerate(labeled):
         print(f"Reading from labeled texts: {i}", end="\r")
         for c in ex[0]: c2i[c]
         for j in jamo.j2hcj(jamo.h2j(ex[0])): j2i[j]
+
+        # Skip sentences that are too long, for memory concern
+        #if len(ex[0]) > 200:
+        #    l += 1
+        #    continue
+
         L.append(ex)
 
     for i, ex in enumerate(unlabeled):
         print(f"Reading from unlabeled texts: {i}", end="\r")
         for c in ex[0]: c2i[c]
         for j in jamo.j2hcj(jamo.h2j(ex[0])): j2i[j]
+
+        # Skip sentences that are too long, for memory concern
+        #if len(ex[0]) > 200:
+        #    u += 1
+        #    continue
+
         U.append(ex)
 
     rnd_inds = sorted(random.sample(range(len(U)), U_SUB_SIZE), reverse=True)
@@ -103,12 +117,17 @@ if __name__ == "__main__":
     m_cbilstm = cbilstm.CBiLSTM(len(c2i), len(j2i), CLF_OR_REG)
     m_kobert = kobert.BertSentimentPredictor(CLF_OR_REG)
 
-    if CUDA > -1:
+    if len(CUDA) > 0:
         print(f"\nUsing CUDA device {CUDA}")
-        m_cbilstm.to(f"cuda:{CUDA}"); m_kobert.to(f"cuda:{CUDA}")
 
-    optim_c = optim.Adam(m_cbilstm.parameters())
-    optim_b = optim.Adam(m_kobert.parameters())
+        if len(CUDA) > 1:
+            m_cbilstm = nn.DataParallel(m_cbilstm, device_ids=CUDA)
+            m_kobert = nn.DataParallel(m_kobert, device_ids=CUDA)
+
+        m_cbilstm.to(f"cuda:{CUDA[0]}"); m_kobert.to(f"cuda:{CUDA[0]}")
+
+    optim_c = optim.Adagrad(m_cbilstm.parameters())
+    optim_b = optim.Adagrad(m_kobert.parameters())
 
     if CLF_OR_REG:
         criterion = nn.CrossEntropyLoss()
@@ -139,7 +158,7 @@ if __name__ == "__main__":
         out = m_cbilstm(batch_ch, batch_jm, batch_lens)
         loss = criterion(out, target)
 
-        dev_loss_c += loss.item()
+        dev_loss_c += loss.item() * batch_ch.shape[0]
 
     dev_loss_b = 0.0
     for i, batch in enumerate(dev_gen_b):
@@ -158,12 +177,13 @@ if __name__ == "__main__":
         out = m_kobert(batch_bert)
         loss = criterion(out, target)
 
-        dev_loss_b += loss.item()
+        dev_loss_b += loss.item() * batch_bert.shape[0]
 
     print(f"Before training: Dev loss CBiLSTM {dev_loss_c:.4f}, KoBERT {dev_loss_b:.4f}")
 
     ## Co-training loop
     for t in range(COTR_EPOCH):
+
         m_kobert.train(); m_cbilstm.train() # Train mode
 
         # Batch generators
@@ -217,7 +237,6 @@ if __name__ == "__main__":
 
             # Update
             optim_b.step()
-        
 
         # Dev loss after each epoch
         m_cbilstm.eval(); m_kobert.eval()
@@ -242,7 +261,7 @@ if __name__ == "__main__":
             out = m_cbilstm(batch_ch, batch_jm, batch_lens)
             loss = criterion(out, target)
 
-            dev_loss_c += loss.item()
+            dev_loss_c += loss.item() * batch_ch.shape[0]
 
         dev_loss_b = 0.0
         for i, batch in enumerate(dev_gen_b):
@@ -261,7 +280,7 @@ if __name__ == "__main__":
             out = m_kobert(batch_bert)
             loss = criterion(out, target)
 
-            dev_loss_b += loss.item()
+            dev_loss_b += loss.item() * batch_bert.shape[0]
 
         print(f"Epoch {t+1}: Dev loss CBiLSTM {dev_loss_c:.4f}, KoBERT {dev_loss_b:.4f}")
 
@@ -335,6 +354,7 @@ if __name__ == "__main__":
                 label = round(m_cbilstm(ins[0], ins[1], ins[2]).item(), 3)
 
             L_c.append((U_sub[i][0], str(label)))
+
         for i in topN_inds_b:
             ins = list(kobert.batch_samples([U_sub[i]], 1, CUDA))[0]
 

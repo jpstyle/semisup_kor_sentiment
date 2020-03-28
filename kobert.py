@@ -1,7 +1,7 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from kobert_transformers import get_kobert_model, get_tokenizer
+from kobert_transformers import get_distilkobert_model, get_tokenizer
 
 tokenizer = get_tokenizer()
 
@@ -14,14 +14,18 @@ class BertSentimentPredictor(nn.Module):
 
         self.clf_or_reg = clf_or_reg
 
-        self.bert = get_kobert_model()
+        self.bert = get_distilkobert_model()
+
+        self.do = nn.Dropout(p=0.5)
+
+        EMB_SIZE = self.bert.embeddings.position_embeddings.weight.shape[-1]
 
         if self.clf_or_reg:
             # Classification task
-            self.u = nn.Linear(self.bert.pooler.dense.out_features, 3)
+            self.u = nn.Linear(EMB_SIZE, 3)
         else:
             # Regression task
-            self.u = nn.Linear(self.bert.pooler.dense.out_features, 1)
+            self.u = nn.Linear(EMB_SIZE, 1)
 
         # Xavier inits
         nn.init.xavier_normal_(self.u.weight)
@@ -33,9 +37,9 @@ class BertSentimentPredictor(nn.Module):
 
         # Attention mask
         b_mask = (batch != tokenizer.pad_token_id).to(torch.long)
-        b_type = torch.zeros_like(batch, dtype=torch.long)
 
-        _, bert_cls = self.bert(batch, b_mask, b_type)
+        bert_out = self.bert(batch, b_mask)
+        bert_cls = self.do(bert_out[0][:,0])
 
         if self.clf_or_reg:
             squashed = self.u(bert_cls)
@@ -43,6 +47,11 @@ class BertSentimentPredictor(nn.Module):
             return squashed
         else:
             squashed = self.u(bert_cls).squeeze()
+
+            # Happens with DataParallel, with singleton inputs
+            if len(squashed.shape) == 0:
+                squashed = squashed.unsqueeze(0)
+
             squashed = torch.sigmoid(squashed)
  
             return squashed * 4 # Range of 0 ~ 4
@@ -75,11 +84,11 @@ def batch_samples(examples, batch_size, cuda_device):
         else:
             b_scores = None
 
-        if cuda_device > -1:
-            b_as_tensor = b_as_tensor.to(f"cuda:{cuda_device}")
+        if len(cuda_device) > 0:
+            b_as_tensor = b_as_tensor.to(f"cuda:{cuda_device[0]}")
 
             if b_scores is not None:
-                b_scores = b_scores.to(f"cuda:{cuda_device}")
+                b_scores = b_scores.to(f"cuda:{cuda_device[0]}")
 
         return b_as_tensor, b_scores
 
