@@ -33,11 +33,15 @@ class CBiLSTM(nn.Module):
         self.ch_convs = nn.ModuleList([nn.Conv1d(CH_SIZE, k_out, k_size, padding=1) for k_size, k_out in CH_KERNELS])
         self.jm_convs = nn.ModuleList([nn.Conv1d(JM_SIZE, k_out, k_size, padding=1) for k_size, k_out in JM_KERNELS])
 
+        # Layer normalizations
+        self.ch_layernorm = nn.LayerNorm(sum([k for n, k in CH_KERNELS]))
+        self.jm_layernorm = nn.LayerNorm(sum([k for n, k in JM_KERNELS]))
+
         # 2-layer bidirectional LSTM
-        self.lstm = nn.LSTM(input_size=LSTM_DIM, hidden_size=LSTM_DIM, num_layers=2, bidirectional=True, dropout=0.5, batch_first=True)
+        self.lstm = nn.LSTM(input_size=LSTM_DIM, hidden_size=LSTM_DIM, num_layers=2, bidirectional=True, dropout=0.3, batch_first=True)
 
         # Dropout
-        self.do = nn.Dropout(p=0.5)
+        self.do = nn.Dropout(p=0.3)
 
         # Squasher
         if self.clf_or_reg:
@@ -49,6 +53,9 @@ class CBiLSTM(nn.Module):
 
         # Xavier inits
         for name, prm in self.named_parameters():
+            if "layernorm" in name:
+                continue
+
             if "weight" in name:
                 nn.init.xavier_normal_(prm)
             elif "bias" in name:
@@ -73,6 +80,11 @@ class CBiLSTM(nn.Module):
 
         # Concat to single vecs
         ch_seqs = torch.cat(ch_seqs, dim=-1); jm_seqs = torch.cat(jm_seqs, dim=-1)
+
+        # LayerNorm
+        ch_seqs = self.ch_layernorm(ch_seqs); jm_seqs = self.jm_layernorm(jm_seqs)
+
+        # As single input to LSTM
         seqs = torch.cat([ch_seqs, jm_seqs], dim=-1)
         seqs = self.do(seqs)
         seqs = nn.utils.rnn.pack_padded_sequence(seqs, batch_lens, batch_first=True, enforce_sorted=False)

@@ -16,7 +16,7 @@ class BertSentimentPredictor(nn.Module):
 
         self.bert = get_distilkobert_model()
 
-        self.do = nn.Dropout(p=0.5)
+        self.do = nn.Dropout(p=0.3)
 
         EMB_SIZE = self.bert.embeddings.position_embeddings.weight.shape[-1]
 

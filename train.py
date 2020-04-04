@@ -1,3 +1,4 @@
+import os
 import random
 import argparse
 import data
@@ -9,6 +10,8 @@ import torch.nn as nn
 import torch.nn.functional as F
 import torch.optim as optim
 from collections import defaultdict
+
+import faulthandler; faulthandler.enable()
 
 
 def parse_arguments():
@@ -23,6 +26,9 @@ def parse_arguments():
         type=str,
         default="",
         help="path to unlabeled data tsv file")
+    parser.add_argument("-mp", "--model_path",
+        type=str,
+        help="path to model, for continuing training")
     parser.add_argument("-ep", "--epoch",
         type=int,
         default=100,
@@ -56,17 +62,22 @@ if __name__ == "__main__":
     CUDA = args.cuda_device
     COTR_EPOCH = args.epoch
     BATCH_SIZE = args.batch_size
-    N = BATCH_SIZE * 2
+    N = BATCH_SIZE * 4
     U_SUB_SIZE = BATCH_SIZE * 12
-
-    # Char/jamo vocabularies
-    c2i = defaultdict(lambda: len(c2i))
-    j2i = defaultdict(lambda: len(j2i))
-    c2i["[PAD]"]; j2i["[PAD]"]
 
     # Data generators
     labeled = data.read_csv(args.labeled_path)
     unlabeled = data.read_csv(args.unlabeled_path)
+
+    # Char/jamo vocabularies
+    if args.model_path is None:
+        c2i = defaultdict(lambda: len(c2i))
+        j2i = defaultdict(lambda: len(j2i))
+        c2i["[PAD]"]; j2i["[PAD]"]
+    else:
+        checkpoint = torch.load(args.model_path)
+        c2i = checkpoint["c2i"]
+        j2i = checkpoint["j2i"]
 
     # Labeled & unlabeled pool of data
     L = []
@@ -81,22 +92,12 @@ if __name__ == "__main__":
         for c in ex[0]: c2i[c]
         for j in jamo.j2hcj(jamo.h2j(ex[0])): j2i[j]
 
-        # Skip sentences that are too long, for memory concern
-        #if len(ex[0]) > 200:
-        #    l += 1
-        #    continue
-
         L.append(ex)
 
     for i, ex in enumerate(unlabeled):
         print(f"Reading from unlabeled texts: {i}", end="\r")
         for c in ex[0]: c2i[c]
         for j in jamo.j2hcj(jamo.h2j(ex[0])): j2i[j]
-
-        # Skip sentences that are too long, for memory concern
-        #if len(ex[0]) > 200:
-        #    u += 1
-        #    continue
 
         U.append(ex)
 
@@ -117,6 +118,16 @@ if __name__ == "__main__":
     m_cbilstm = cbilstm.CBiLSTM(len(c2i), len(j2i), CLF_OR_REG)
     m_kobert = kobert.BertSentimentPredictor(CLF_OR_REG)
 
+    optim_c = optim.AdamW(m_cbilstm.parameters(), lr=0.0001)
+    optim_b = optim.AdamW(m_kobert.parameters(), lr=0.000003)
+
+    if args.model_path is not None:
+        m_cbilstm.load_state_dict(checkpoint["model_c"])
+        m_kobert.load_state_dict(checkpoint["model_b"])
+
+        optim_c.load_state_dict(checkpoint["optim_c"])
+        optim_b.load_state_dict(checkpoint["optim_b"])
+
     if len(CUDA) > 0:
         print(f"\nUsing CUDA device {CUDA}")
 
@@ -125,9 +136,6 @@ if __name__ == "__main__":
             m_kobert = nn.DataParallel(m_kobert, device_ids=CUDA)
 
         m_cbilstm.to(f"cuda:{CUDA[0]}"); m_kobert.to(f"cuda:{CUDA[0]}")
-
-    optim_c = optim.Adagrad(m_cbilstm.parameters())
-    optim_b = optim.Adagrad(m_kobert.parameters())
 
     if CLF_OR_REG:
         criterion = nn.CrossEntropyLoss()
@@ -181,8 +189,10 @@ if __name__ == "__main__":
 
     print(f"Before training: Dev loss CBiLSTM {dev_loss_c:.4f}, KoBERT {dev_loss_b:.4f}")
 
+    ep_start = 0 if args.model_path is None else checkpoint["epoch"]
+
     ## Co-training loop
-    for t in range(COTR_EPOCH):
+    for t in range(ep_start, COTR_EPOCH):
 
         m_kobert.train(); m_cbilstm.train() # Train mode
 
@@ -378,18 +388,18 @@ if __name__ == "__main__":
             del U[i]
 
 
-    # Save trained models
-    checkpoint = {
-        "c2i": c2i,
-        "j2i": j2i,
-        "model_c": m_cbilstm.module.state_dict(),
-        "model_b": m_kobert.module.state_dict()
-    }
+        # Save trained models
+        checkpoint = {
+            "epoch": t,
+            "c2i": c2i,
+            "j2i": j2i,
+            "model_c": m_cbilstm.module.state_dict() if len(args.cuda_device) > 1 else m_cbilstm.state_dict(),
+            "model_b": m_kobert.module.state_dict() if len(args.cuda_device) > 1 else m_kobert.state_dict(),
+            "optim_c": optim_c.state_dict(),
+            "optim_b": optim_b.state_dict()
+        }
     
-    if not os.path.isdir("models"):
-        os.mkdir("models")
-    save_path = os.path.join("models", f"{args.exp_mode}_{args.epoch}.pt")
-    torch.save(checkpoint, save_path)
-
-    print("----------------")
-    print(f"Saved model checkpoint to {save_path}")
+        if not os.path.isdir("models"):
+            os.mkdir("models")
+        save_path = os.path.join("models", f"{args.exp_mode}_{args.preheat}_{args.batch_size}.pt")
+        torch.save(checkpoint, save_path)
