@@ -118,8 +118,11 @@ if __name__ == "__main__":
     m_cbilstm = cbilstm.CBiLSTM(len(c2i), len(j2i), CLF_OR_REG)
     m_kobert = kobert.BertSentimentPredictor(CLF_OR_REG)
 
-    optim_c = optim.AdamW(m_cbilstm.parameters(), lr=0.0001)
-    optim_b = optim.AdamW(m_kobert.parameters(), lr=0.000003)
+    lr_c = 0.00001 if CLF_OR_REG else 0.00005
+    lr_b = 0.000001 if CLF_OR_REG else 0.000005
+
+    optim_c = optim.AdamW(m_cbilstm.parameters(), lr=lr_c)
+    optim_b = optim.AdamW(m_kobert.parameters(), lr=lr_b)
 
     if args.model_path is not None:
         m_cbilstm.load_state_dict(checkpoint["model_c"])
@@ -189,7 +192,14 @@ if __name__ == "__main__":
 
     print(f"Before training: Dev loss CBiLSTM {dev_loss_c:.4f}, KoBERT {dev_loss_b:.4f}")
 
-    ep_start = 0 if args.model_path is None else checkpoint["epoch"]
+    if args.model_path is None:
+        ep_start = 0
+        c_devloss_best = dev_loss_c
+        b_devloss_best = dev_loss_b
+    else:
+        ep_start = checkpoint["epoch"]
+        c_devloss_best = checkpoint["devloss_c"]
+        b_devloss_best = checkpoint["devloss_b"]
 
     ## Co-training loop
     for t in range(ep_start, COTR_EPOCH):
@@ -387,19 +397,24 @@ if __name__ == "__main__":
             U_sub.append(U[i])
             del U[i]
 
+        if dev_loss_c < c_devloss_best and dev_loss_b < b_devloss_best:
+            c_devloss_best = dev_loss_c
+            b_devloss_best = dev_loss_b
 
-        # Save trained models
-        checkpoint = {
-            "epoch": t,
-            "c2i": c2i,
-            "j2i": j2i,
-            "model_c": m_cbilstm.module.state_dict() if len(args.cuda_device) > 1 else m_cbilstm.state_dict(),
-            "model_b": m_kobert.module.state_dict() if len(args.cuda_device) > 1 else m_kobert.state_dict(),
-            "optim_c": optim_c.state_dict(),
-            "optim_b": optim_b.state_dict()
-        }
+            # Save trained models
+            checkpoint = {
+                "epoch": t,
+                "c2i": c2i,
+                "j2i": j2i,
+                "model_c": m_cbilstm.module.state_dict() if len(args.cuda_device) > 1 else m_cbilstm.state_dict(),
+                "model_b": m_kobert.module.state_dict() if len(args.cuda_device) > 1 else m_kobert.state_dict(),
+                "optim_c": optim_c.state_dict(),
+                "optim_b": optim_b.state_dict(),
+                "devloss_c": c_devloss_best,
+                "devloss_b": b_devloss_best
+            }
     
-        if not os.path.isdir("models"):
-            os.mkdir("models")
-        save_path = os.path.join("models", f"{args.exp_mode}_{args.preheat}_{args.batch_size}.pt")
-        torch.save(checkpoint, save_path)
+            if not os.path.isdir("models"):
+                os.mkdir("models")
+            save_path = os.path.join("models", f"{args.exp_mode}_{args.preheat}_{args.batch_size}.pt")
+            torch.save(checkpoint, save_path)
