@@ -107,9 +107,7 @@ class CBiLSTM(nn.Module):
             if len(squashed.shape) == 0:
                 squashed = squashed.unsqueeze(0)
 
-            squashed = torch.sigmoid(squashed)
- 
-            return squashed * 4 # Range of 0 ~ 4
+            return squashed
 
 
 def batch_samples(examples, batch_size, c2i, j2i, cuda_device):

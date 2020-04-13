@@ -52,9 +52,7 @@ class BertSentimentPredictor(nn.Module):
             if len(squashed.shape) == 0:
                 squashed = squashed.unsqueeze(0)
 
-            squashed = torch.sigmoid(squashed)
- 
-            return squashed * 4 # Range of 0 ~ 4
+            return squashed
 
 
 # Process and batch samples from generator

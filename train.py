@@ -62,8 +62,8 @@ if __name__ == "__main__":
     CUDA = args.cuda_device
     COTR_EPOCH = args.epoch
     BATCH_SIZE = args.batch_size
-    N = BATCH_SIZE * 4
-    U_SUB_SIZE = BATCH_SIZE * 12
+    N = BATCH_SIZE * 2
+    U_SUB_SIZE = BATCH_SIZE * 10
 
     # Data generators
     labeled = data.read_csv(args.labeled_path)
@@ -118,11 +118,10 @@ if __name__ == "__main__":
     m_cbilstm = cbilstm.CBiLSTM(len(c2i), len(j2i), CLF_OR_REG)
     m_kobert = kobert.BertSentimentPredictor(CLF_OR_REG)
 
-    lr_c = 0.00001 if CLF_OR_REG else 0.00005
-    lr_b = 0.000001 if CLF_OR_REG else 0.000005
+    lr = {"c": 0.000005, "b": 0.000002} if CLF_OR_REG else {"c": 0.00005, "b": 0.000005}
 
-    optim_c = optim.AdamW(m_cbilstm.parameters(), lr=lr_c)
-    optim_b = optim.AdamW(m_kobert.parameters(), lr=lr_b)
+    optim_c = optim.AdamW(m_cbilstm.parameters(), lr=lr["c"])
+    optim_b = optim.AdamW(m_kobert.parameters(), lr=lr["b"])
 
     if args.model_path is not None:
         m_cbilstm.load_state_dict(checkpoint["model_c"])
@@ -373,6 +372,8 @@ if __name__ == "__main__":
             else:
                 label = round(m_cbilstm(ins[0], ins[1], ins[2]).item(), 3)
 
+            #print(label, end=" ")
+
             L_c.append((U_sub[i][0], str(label)))
 
         for i in topN_inds_b:
@@ -382,6 +383,8 @@ if __name__ == "__main__":
                 label = m_kobert(ins[0]).max(dim=-1).indices.item() + 1
             else:
                 label = round(m_kobert(ins[0]).item(), 3)
+
+            #print(label, end=" ")
 
             L_b.append((U_sub[i][0], str(label)))
 
@@ -397,7 +400,8 @@ if __name__ == "__main__":
             U_sub.append(U[i])
             del U[i]
 
-        if dev_loss_c < c_devloss_best and dev_loss_b < b_devloss_best:
+        #if dev_loss_c < c_devloss_best and dev_loss_b < b_devloss_best:
+        if True:
             c_devloss_best = dev_loss_c
             b_devloss_best = dev_loss_b
 
