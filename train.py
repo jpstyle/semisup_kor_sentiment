@@ -118,7 +118,7 @@ if __name__ == "__main__":
     m_cbilstm = cbilstm.CBiLSTM(len(c2i), len(j2i), CLF_OR_REG)
     m_kobert = kobert.BertSentimentPredictor(CLF_OR_REG)
 
-    lr = {"c": 0.000005, "b": 0.000002} if CLF_OR_REG else {"c": 0.00005, "b": 0.000005}
+    lr = {"c": 0.000005, "b": 0.0000005} if CLF_OR_REG else {"c": 0.00006, "b": 0.000005}
 
     optim_c = optim.AdamW(m_cbilstm.parameters(), lr=lr["c"])
     optim_b = optim.AdamW(m_kobert.parameters(), lr=lr["b"])

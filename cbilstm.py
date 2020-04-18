@@ -86,7 +86,7 @@ class CBiLSTM(nn.Module):
 
         # As single input to LSTM
         seqs = torch.cat([ch_seqs, jm_seqs], dim=-1)
-        seqs = self.do(seqs)
+        seqs = F.relu(self.do(seqs))
         seqs = nn.utils.rnn.pack_padded_sequence(seqs, batch_lens, batch_first=True, enforce_sorted=False)
 
         # Feed to LSTM and retrieve summarizing representations
@@ -95,6 +95,7 @@ class CBiLSTM(nn.Module):
         seq_embs = final_states.view(2, 2, b_size, -1) # (num_layer, num_direction, b_size, hidden_size)
         seq_embs = seq_embs[1,:,:,:]
         seq_embs = torch.cat([seq_embs[0], seq_embs[1]], dim=-1)
+        seq_embs = F.relu(seq_embs)
 
         if self.clf_or_reg:
             squashed = self.u(seq_embs)

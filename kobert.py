@@ -39,7 +39,7 @@ class BertSentimentPredictor(nn.Module):
         b_mask = (batch != tokenizer.pad_token_id).to(torch.long)
 
         bert_out = self.bert(batch, b_mask)
-        bert_cls = self.do(bert_out[0][:,0])
+        bert_cls = F.relu(self.do(bert_out[0][:,0]))
 
         if self.clf_or_reg:
             squashed = self.u(bert_cls)
